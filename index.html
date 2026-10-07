@@ -53,20 +53,25 @@ body.watching #bMenu,body.watching #ui,body.watching #info{display:none}
 #lib .card .act .rep{flex:0 0 auto;color:rgba(255,255,255,.45)}
 .card.reported{opacity:.35}
 .card.song{padding-top:4px}
-.card .dots{display:flex;gap:3px;flex-wrap:wrap;padding:4px 8px 10px}
+.card .dots{display:flex;gap:4px;flex-wrap:wrap;padding:4px 8px 10px;align-items:flex-start}
+.card .dots span{display:flex;flex-direction:column;gap:2px}
 .card .dots i{width:10px;height:10px;border-radius:50%;display:block}
 #strip{border-top:1px solid rgba(255,255,255,.2);padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#000}
-#sItems{display:flex;gap:0;overflow-x:auto;padding-bottom:6px;min-height:98px;align-items:center;-webkit-overflow-scrolling:touch}
+#sItems{display:flex;gap:0;overflow-x:auto;padding:10px 0 6px;min-height:110px;max-height:46vh;align-items:flex-start;-webkit-overflow-scrolling:touch}
 .sempty{color:rgba(255,255,255,.4);padding:0 4px}
 .scard{display:flex;align-items:center;flex:0 0 auto}
-.sbox{position:relative;width:128px;height:80px;border:1px solid rgba(255,255,255,.3);background:#000}
-.sbox canvas{display:block;width:128px;height:80px}
-.scard.stack .sbox{box-shadow:4px -4px 0 -1px #000,4px -4px 0 0 rgba(255,255,255,.35),8px -8px 0 -1px #000,8px -8px 0 0 rgba(255,255,255,.2)}
+.scol{position:relative;width:128px;border:1px solid rgba(255,255,255,.3);background:#000;display:flex;flex-direction:column;cursor:pointer}
+.scol.sel{border-color:#fff;box-shadow:0 0 0 1px #fff}
+.shead{display:flex;align-items:center;gap:2px;height:22px;border-bottom:1px solid rgba(255,255,255,.2)}
+#lib .shead button{padding:3px 6px;border:0;background:transparent;font-size:10px}
+#lib .shead .srep{margin-left:auto;background:#fff;color:#000}
+.scnt{font-size:9px;color:rgba(255,255,255,.5);padding:0 3px}
+.smini{position:relative;border-top:1px solid rgba(255,255,255,.12)}
+.smini canvas{display:block;width:128px;height:auto}
+#lib .svol{position:absolute;right:0;bottom:0;padding:3px 5px;border:0;background:rgba(0,0,0,.7);font-size:9px;letter-spacing:0}
+.scard.stack .scol{box-shadow:4px -4px 0 -1px #000,4px -4px 0 0 rgba(255,255,255,.35),8px -8px 0 -1px #000,8px -8px 0 0 rgba(255,255,255,.2)}
 .sl{position:absolute;left:4px;bottom:4px;font-size:10px;color:#fff;text-shadow:0 0 3px #000}
 #lib .sx{position:absolute;right:0;top:0;padding:4px 7px;border:0;background:rgba(0,0,0,.6)}
-#lib .srep{position:absolute;right:0;bottom:0;padding:4px 7px;border:0;background:#fff;color:#000}
-.smv{position:absolute;left:0;top:0;display:flex}
-#lib .smv button{padding:4px 6px;border:0;background:rgba(0,0,0,.6)}
 #lib .str{margin:0 6px;padding:6px 7px;font-size:10px;color:rgba(255,255,255,.55);border-style:dashed}
 #lib .str.on{color:#fff;border-color:#ff2a2a;border-style:solid}
 #lib .str:hover,#lib .str.on:hover{background:#fff;color:#000}
@@ -116,7 +121,7 @@ const cv=$('c');
 const g=cv.getContext('2d',{willReadFrequently:true,alpha:false});
 const coarse=matchMedia('(pointer:coarse)').matches;
 const SIM_LONG=coarse?1200:1600;
-const K=SIM_LONG/1600;
+let simLong=SIM_LONG,K=simLong/1600;
 let simW=0,simH=0;
 let rnd=Math.random;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
@@ -129,8 +134,8 @@ const MAXR=()=>.85*Math.hypot(simW,simH);
 /* ===== sim canvas ===== */
 function calcSim(){
   const iw=innerWidth,ih=innerHeight;
-  if(iw>=ih){simW=SIM_LONG;simH=Math.max(2,Math.round(SIM_LONG*ih/iw));}
-  else{simH=SIM_LONG;simW=Math.max(2,Math.round(SIM_LONG*iw/ih));}
+  if(iw>=ih){simW=simLong;simH=Math.max(2,Math.round(simLong*ih/iw));}
+  else{simH=simLong;simW=Math.max(2,Math.round(simLong*iw/ih));}
 }
 calcSim();
 cv.width=simW;cv.height=simH;
@@ -900,6 +905,13 @@ function runOp(f,op){
     }
   }finally{rnd=old;}
 }
+/* replays share a per-frame effect budget: cracks always draw, but when many layers land at once on a slow
+   device the extra glitch effects are skipped instead of piling up and freezing the page */
+let rbudget=12;
+function replayOp(f,op){
+  if(op.k==='g'||op.k==='l'){if(rbudget<=0)return;rbudget-=op.k==='g'?1:.5;}
+  runOp(f,op);
+}
 function burst(f,p,th){
   const r=rad(p,f.maxR)*1.25,k=.35+.65*p,n=3+Math.round(4*p);
   f.put({t:th,k:'rev',r});
@@ -927,9 +939,9 @@ class Fr{
     if(!this.live){
       const te=t*this.ts,p=growth(Math.min(te,this.hold)),O=this.ops;
       this.p=p;reveal(this,rad(p,this.maxR));
-      while(this.oi<O.length&&O[this.oi].t<=te)runOp(this,O[this.oi++]);
+      while(this.oi<O.length&&O[this.oi].t<=te)replayOp(this,O[this.oi++]);
       if(te>=this.hold){
-        while(this.oi<O.length)runOp(this,O[this.oi++]);
+        while(this.oi<O.length)replayOp(this,O[this.oi++]);
         this.done=true;this.released=true;shake+=6+16*growth(this.hold);
       }
       return;
@@ -1219,7 +1231,7 @@ const LIB={
     if(API)return(await post('/songs',{items})).id;
     const d=lread(),id=d.nextSong=(d.nextSong||0)+1,loops=items.reduce((a,it,i)=>a+it.n+(i<items.length-1?it.t/4:0),0);
     d.songs.push({id,items,loops,dots});
-    const used=new Set(items.map(i=>i.r));d.recipes.forEach(r=>{if(used.has(r.id))r.uses=(r.uses||0)+1;});
+    const used=new Set(items.flatMap(i=>i.c.map(c=>c[0])));d.recipes.forEach(r=>{if(used.has(r.id))r.uses=(r.uses||0)+1;});
     if(!lwrite(d))throw new Error('DEVICE STORAGE FULL');return id;
   },
   async report(kind,id){if(API)return post('/report',{kind,id});},
@@ -1235,19 +1247,27 @@ function layerGains(ev){
 
 /* ---- song player (watch only) ---- */
 let song=null,stash=[];
+const VOL=[.35,.65,1],VOLS=['▮▯▯','▮▮▯','▮▮▮'],CAP=48,MAXCOL=4;
+/* a song item is a slot: {c:[[recipe,vol],...], n:repeats, t:fade bars}. older songs stored {r,n,t} */
+const normItem=it=>it.c?it:{c:[[it.r,2]],n:it.n,t:it.t};
 function buildSegs(items,recs){
   const cache={},evs=id=>cache[id]||(cache[id]=decodeRecipe(recs[id],0)),segs=[];
+  const col=it=>{const out=[];it.c.forEach(([id,v])=>{if(recs[id])evs(id).forEach(e=>out.push([e,VOL[v]==null?1:VOL[v]]));});return out;};
   items.forEach((it,idx)=>{
-    if(!recs[it.r])return;
-    const A=evs(it.r);
-    for(let k=0;k<it.n;k++)segs.push({lay:A.map(e=>[e,1,1,true]),card:idx,rep:k+1,of:it.n});
+    const A=col(it);if(!A.length)return;
+    for(let k=0;k<it.n;k++)segs.push({lay:A.map(([e,v])=>[e,v,v,true]),card:idx,rep:k+1,of:it.n});
     const nx=items[idx+1];
-    if(it.t&&nx&&recs[nx.r]&&nx.r!==it.r){
-      const B=evs(nx.r),K=it.t/4;
-      for(let k=0;k<K;k++){
-        const a0=1-k/K,a1=1-(k+1)/K,b0=k/K,b1=(k+1)/K;
-        /* audio crossfades smoothly; on screen A's layers drop out one by one while B's come in one by one */
-        segs.push({lay:A.map((e,j)=>[e,a0,a1,(j+.5)/A.length<a0]).concat(B.map((e,j)=>[e,b0,b1,(j+.5)/B.length<b1])),card:idx,trans:[idx,idx+1],k:k+1,of:K});
+    if(it.t&&nx){
+      const B=col(nx),inA=new Set(A.map(a=>a[0]));
+      if(B.length&&!B.some(b=>inA.has(b[0]))){
+        const K=it.t/4;
+        for(let k=0;k<K;k++){
+          const a0=1-k/K,a1=1-(k+1)/K,b0=k/K,b1=(k+1)/K,am=(a0+a1)/2,bm=(b0+b1)/2;
+          /* sound crossfades; the old slot's layers drop out one by one while the new slot's come in,
+             so even two full slots never play much more than one slot's worth (48 layers) at once */
+          segs.push({lay:A.filter((x,j)=>(j+.5)/A.length<am).map(([e,v])=>[e,v*a0,v*a1,true])
+            .concat(B.filter((x,j)=>(j+.5)/B.length<bm).map(([e,v])=>[e,v*b0,v*b1,true])),card:idx,trans:[idx,idx+1],k:k+1,of:K});
+        }
       }
     }
   });
@@ -1276,8 +1296,9 @@ async function startSong(items,title){
   if(!AC){toast('AUDIO UNAVAILABLE');return;}
   if(AC.state!=='running')AC.resume();
   let recs;
-  try{toast('LOADING…');recs=await LIB.recipes(items.map(i=>i.r));}catch(e){toast('COULD NOT LOAD · '+e.message);return;}
-  items=items.filter(i=>recs[i.r]);
+  items=items.map(normItem);
+  try{toast('LOADING…');recs=await LIB.recipes(items.flatMap(i=>i.c.map(c=>c[0])));}catch(e){toast('COULD NOT LOAD · '+e.message);return;}
+  items=items.filter(i=>i.c.some(c=>recs[c[0]]));
   if(!items.length){toast('NOTHING TO PLAY');return;}
   if(!song)stash=events.slice();
   wipe();
@@ -1300,7 +1321,7 @@ function songStatus(){
   if(song.endT!==null)return(song.title||'SONG')+' · END';
   const s=song.segs[Math.max(0,song.i)];if(!s)return'';
   const n=song.items.length;
-  return(song.title||'SONG')+' · CARD '+(s.card+1)+'/'+n+(s.trans?' · FADE → '+(s.trans[1]+1):' · ×'+s.rep+'/'+s.of)+' · LOOP '+(song.i+1)+'/'+song.segs.length;
+  return(song.title||'SONG')+' · SLOT '+(s.card+1)+'/'+n+(s.trans?' · FADE → '+(s.trans[1]+1):' · ×'+s.rep+'/'+s.of)+' · LOOP '+(song.i+1)+'/'+song.segs.length;
 }
 $('wStop').onclick=stopSong;
 $('wAgain').onclick=()=>{if(song)startSong(song.items,song.title);};
@@ -1378,9 +1399,10 @@ function recipeCard(it){
   const me=document.createElement('div');me.className='meta';
   me.innerHTML='<b>FRACTURE '+num(it.id)+'</b><span>'+it.card.length+' LAYER'+(it.card.length>1?'S':'')+(it.uses?' · ⟲ '+it.uses:'')+'</span>';
   const ac=document.createElement('div');ac.className='act';
-  ac.append(btn('▶',()=>startSong([{r:it.id,n:2,t:0}],'FRACTURE '+num(it.id)),'play'),
+  ac.append(btn('▶',()=>startSong([{c:[[it.id,2]],n:2,t:0}],'FRACTURE '+num(it.id)),'play'),
     btn('＋ CANVAS',()=>addToCanvas(it.id)),
     btn('＋ SONG',()=>{addStrip(it.id,it.card);}),
+    btn('＋ LAYER',()=>{addLayer(it.id,it.card);}),
     btn('⚑',b=>report('recipe',it.id,b,el),'rep'));
   if(ADMIN&&API)ac.append(btn('HIDE',()=>LIB.hide('recipe',it.id).then(()=>el.remove()).catch(e=>toast(e.message)),'rep'));
   el.append(th,st,ch,me,ac);
@@ -1389,9 +1411,9 @@ function recipeCard(it){
 function songRow(s){
   const el=document.createElement('div');el.className='card song';
   const sec=Math.round(s.loops*LOOP),dots=document.createElement('div');dots.className='dots';
-  (s.dots||[]).forEach(hu=>{const d=document.createElement('i');d.style.background='hsl('+hu+',100%,62%)';dots.appendChild(d);});
+  (s.dots||[]).forEach(sl=>{const c=document.createElement('span');[].concat(sl).forEach(hu=>{const d=document.createElement('i');d.style.background='hsl('+hu+',100%,62%)';c.appendChild(d);});dots.appendChild(c);});
   const me=document.createElement('div');me.className='meta';
-  me.innerHTML='<b>SONG '+num(s.id)+'</b><span>'+s.items.length+' CARD'+(s.items.length>1?'S':'')+' · '+Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0')+'</span>';
+  me.innerHTML='<b>SONG '+num(s.id)+'</b><span>'+s.items.length+' SLOT'+(s.items.length>1?'S':'')+' · '+Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0')+'</span>';
   const ac=document.createElement('div');ac.className='act';
   ac.append(btn('▶ WATCH',()=>startSong(s.items,'SONG '+num(s.id)),'play'),
     btn('LINK',()=>{const u=location.origin+location.pathname+'?song='+s.id+(QS.get('api')?'&api='+encodeURIComponent(API):'');try{navigator.clipboard.writeText(u);toast('LINK COPIED');}catch(_){toast(u);}}),
@@ -1418,45 +1440,76 @@ $('libRand').onclick=async()=>{
   try{const it=await LIB.randomRecipes(1);if(!it.length){toast('LIBRARY IS EMPTY');return;}await addToCanvas(it[0].id);}catch(e){toast(e.message);}
 };
 
-/* ---- song strip: cards in order, ×N stacks, transition into the next card ---- */
+/* ---- song strip: slots in order; a slot layers up to 4 cards (48 layers) that play together ---- */
 const TR=[0,4,8,16],REP=[1,2,3,4,6,8];
+let slotSel=-1;
+const slotLayers=sl=>sl.c.reduce((a,x)=>a+x.card.length,0);
 function addStrip(id,card,n,t){
-  if(strip.length>=64){toast('SONG IS FULL (64 CARDS)');return;}
-  strip.push({r:id,n:n||1,t:t||0,card:card||cardIndex[id]||[]});renderStrip();
+  if(strip.length>=64){toast('SONG IS FULL (64 SLOTS)');return;}
+  card=card||cardIndex[id]||[];
+  strip.push({c:[{r:id,v:2,card}],n:n||1,t:t||0});slotSel=strip.length-1;renderStrip();
   sItems.scrollLeft=sItems.scrollWidth;
+}
+function addLayer(id,card){
+  card=card||cardIndex[id]||[];
+  if(!strip.length){addStrip(id,card);return;}
+  if(slotSel<0||slotSel>=strip.length)slotSel=strip.length-1;
+  const sl=strip[slotSel];
+  if(sl.c.some(x=>x.r===id)){toast('ALREADY IN THIS SLOT');return;}
+  if(sl.c.length>=MAXCOL){toast('A SLOT HOLDS '+MAXCOL+' CARDS');return;}
+  if(slotLayers(sl)+card.length>CAP){toast('TOO MANY LAYERS · '+(slotLayers(sl)+card.length)+'/'+CAP);return;}
+  sl.c.push({r:id,v:2,card});renderStrip();toast('LAYERED INTO SLOT '+(slotSel+1));
 }
 function renderStrip(){
   sItems.innerHTML='';
-  if(!strip.length){const p=document.createElement('div');p.className='sempty';p.textContent='SONG STRIP · TAP ＋ SONG ON A CARD, OR 🎲';sItems.appendChild(p);}
+  if(!strip.length){const p=document.createElement('div');p.className='sempty';p.textContent='SONG STRIP · ＋ SONG STARTS A SLOT · ＋ LAYER STACKS A CARD INTO THE SELECTED SLOT';sItems.appendChild(p);}
+  if(slotSel>=strip.length)slotSel=strip.length-1;
   strip.forEach((it,i)=>{
     const el=document.createElement('div');el.className='scard'+(it.n>1?' stack':'');el.dataset.i=i;
-    const th=document.createElement('canvas');th.width=128;th.height=80;drawThumb(th,it.card);
-    const lb=document.createElement('span');lb.className='sl';lb.textContent=num(it.r);
-    const x=btn('✕',()=>{strip.splice(i,1);renderStrip();},'sx');
-    const rp=btn('×'+it.n,()=>{it.n=REP[(REP.indexOf(it.n)+1)%REP.length];renderStrip();},'srep');
-    const mv=document.createElement('div');mv.className='smv';
-    mv.append(btn('◀',()=>{if(i>0){[strip[i-1],strip[i]]=[strip[i],strip[i-1]];renderStrip();}}),btn('▶',()=>{if(i<strip.length-1){[strip[i+1],strip[i]]=[strip[i],strip[i+1]];renderStrip();}}));
-    const box=document.createElement('div');box.className='sbox';box.append(th,lb,x,rp,mv);
-    el.appendChild(box);
+    const colEl=document.createElement('div');colEl.className='scol'+(i===slotSel?' sel':'');
+    colEl.onclick=()=>{slotSel=i;renderStrip();};
+    const hd=document.createElement('div');hd.className='shead';
+    const cnt=document.createElement('span');cnt.className='scnt';cnt.textContent=slotLayers(it)+'/'+CAP;
+    hd.append(btn('◀',()=>{if(i>0){[strip[i-1],strip[i]]=[strip[i],strip[i-1]];if(slotSel===i)slotSel--;renderStrip();}}),
+      btn('▶',()=>{if(i<strip.length-1){[strip[i+1],strip[i]]=[strip[i],strip[i+1]];if(slotSel===i)slotSel++;renderStrip();}}),
+      cnt,btn('×'+it.n,()=>{it.n=REP[(REP.indexOf(it.n)+1)%REP.length];renderStrip();},'srep'));
+    colEl.appendChild(hd);
+    it.c.forEach((x,k)=>{
+      const m=document.createElement('div');m.className='smini';
+      const th=document.createElement('canvas');th.width=128;th.height=it.c.length>1?40:72;drawThumb(th,x.card);
+      const lb=document.createElement('span');lb.className='sl';lb.textContent=num(x.r);
+      m.append(th,lb,
+        btn('✕',()=>{it.c.splice(k,1);if(!it.c.length)strip.splice(i,1);renderStrip();},'sx'),
+        btn(VOLS[x.v],()=>{x.v=(x.v+1)%3;renderStrip();},'svol'));
+      colEl.appendChild(m);
+    });
+    el.appendChild(colEl);
     if(i<strip.length-1)el.appendChild(btn(it.t?'FADE '+it.t:'CUT',()=>{it.t=TR[(TR.indexOf(it.t)+1)%TR.length];renderStrip();},'str'+(it.t?' on':'')));
     sItems.appendChild(el);
   });
   const loops=strip.reduce((a,it,i)=>a+it.n+(i<strip.length-1?it.t/4:0),0),sec=Math.round(loops*LOOP);
   $('sLen').textContent=strip.length?Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0'):'';
 }
+const songItems=()=>strip.map((s,i)=>({c:s.c.map(x=>[x.r,x.v]),n:s.n,t:i<strip.length-1?s.t:0}));
 $('sRand').onclick=async()=>{
   try{
-    const it=await LIB.randomRecipes(6);if(!it.length){toast('LIBRARY IS EMPTY');return;}
-    it.forEach(r=>{cardIndex[r.id]=r.card;addStrip(r.id,r.card,REP[(Math.random()*3)|0],TR[(Math.random()*TR.length)|0]);});
+    const it=await LIB.randomRecipes(9);if(!it.length){toast('LIBRARY IS EMPTY');return;}
+    let i=0;
+    while(i<it.length&&strip.length<64){
+      const r=it[i++];cardIndex[r.id]=r.card;
+      strip.push({c:[{r:r.id,v:2,card:r.card}],n:REP[(Math.random()*3)|0],t:TR[(Math.random()*TR.length)|0]});
+      const sl=strip[strip.length-1],r2=it[i];
+      if(r2&&Math.random()<.35&&r2.id!==r.id&&slotLayers(sl)+r2.card.length<=CAP){cardIndex[r2.id]=r2.card;sl.c.push({r:r2.id,v:1,card:r2.card});i++;}
+    }
+    slotSel=strip.length-1;renderStrip();sItems.scrollLeft=sItems.scrollWidth;
   }catch(e){toast(e.message);}
 };
-$('sPlay').onclick=()=>{if(!strip.length){toast('ADD CARDS FIRST');return;}startSong(strip.map(s=>({r:s.r,n:s.n,t:s.t})),'YOUR SONG');};
-$('sClr').onclick=()=>{strip=[];renderStrip();};
-$('sSave').onclick=async b=>{
+$('sPlay').onclick=()=>{if(!strip.length){toast('ADD CARDS FIRST');return;}startSong(songItems(),'YOUR SONG');};
+$('sClr').onclick=()=>{strip=[];slotSel=-1;renderStrip();};
+$('sSave').onclick=async()=>{
   if(!strip.length){toast('ADD CARDS FIRST');return;}
-  const items=strip.map((s,i)=>({r:s.r,n:s.n,t:i<strip.length-1?s.t:0}));
   $('sSave').disabled=true;
-  try{const id=await LIB.saveSong(items,strip.map(s=>(s.card[0]||[0,0,0,0,0])[4]));toast('SAVED · SONG '+num(id));}
+  try{const id=await LIB.saveSong(songItems(),strip.map(s=>s.c.map(x=>(x.card[0]||[0,0,0,0,0])[4])));toast('SAVED · SONG '+num(id));}
   catch(e){toast('NOT SAVED · '+e.message);}
   setTimeout(()=>$('sSave').disabled=false,2500);
 };
@@ -1472,7 +1525,7 @@ $('bSave').onclick=async()=>{
 };
 let sortOn=false;
 function initSort(){if(sortOn||!window.Sortable)return;sortOn=true;try{Sortable.create(sItems,{animation:150,delay:180,delayOnTouchOnly:true,filter:'button',preventOnFilter:false,draggable:'.scard',
-  onEnd:ev=>{if(ev.oldIndex===ev.newIndex)return;const m=strip.splice(ev.oldIndex,1)[0];strip.splice(ev.newIndex,0,m);renderStrip();}});}catch(_){}}
+  onEnd:ev=>{if(ev.oldIndex===ev.newIndex)return;const m=strip.splice(ev.oldIndex,1)[0];strip.splice(ev.newIndex,0,m);slotSel=ev.newIndex;renderStrip();}});}catch(_){}}
 renderStrip();
 
 /* a shared song link (?song=12) waits for one tap, because browsers only start sound after a tap */
@@ -1485,6 +1538,16 @@ async function playPending(){
 }
 
 /* ===== main loop ===== */
+/* adaptive detail: if the page stays below ~22 fps for 3 s, draw the canvas at a lower resolution
+   (1600 -> 1200 -> 900 on the long edge). timing and sound are unaffected; the picture just gets softer. */
+let slowSince=0;
+function qualityCheck(now){
+  if(fms<45||held.size||exp||simLong<=900){slowSince=0;return;}
+  if(!slowSince){slowSince=now;return;}
+  if(now-slowSince<3)return;
+  slowSince=0;simLong=simLong>1200?1200:900;K=simLong/1600;
+  clearWorld();frs=frs.filter(f=>f.live);resize();
+}
 let lastFrameT=0,fms=16,beatLvl=0;const beatEl=$('beat');
 let lastResume=0;
 function frame(){
@@ -1494,7 +1557,9 @@ function frame(){
   if(AC&&AC.state!=='running'&&now-lastResume>1){lastResume=now;try{AC.resume();}catch(_){}}
   sched();
   if(lastFrameT){fms=fms*.9+(now-lastFrameT)*1000*.1;}lastFrameT=now;
-  budget=fms>48?1:fms>32?2:3;      /* slow device: fewer glitches per frame so it stays playable */
+  budget=fms>48?1:fms>32?2:3;
+  rbudget=fms>50?2:fms>34?4:fms>24?7:10;
+  qualityCheck(now);      /* slow device: fewer glitches per frame so it stays playable */
   if(AC){
     const ac=AC.currentTime;
     const lat=AC.outputLatency||AC.baseLatency||0;
@@ -1525,7 +1590,7 @@ function frame(){
     $('wInfo').textContent=songStatus();
     if(song.endT!==null&&AC&&AC.currentTime>song.endT+1.5)$('wAgain').style.display='';
   }
-  info.textContent=Math.round(1000/fms)+' FPS · '+BPM+' BPM · 4 BARS · LAYERS '+events.length+'/'+MAXV+' · C heal · M sound · K click · R mp4 · E jpg · 0-9 type';
+  info.textContent=Math.round(1000/fms)+' FPS · RES '+simLong+' · '+BPM+' BPM · 4 BARS · LAYERS '+events.length+'/'+MAXV+' · C heal · M sound · K click · R mp4 · E jpg · 0-9 type';
   }catch(e){console.warn('frame error',e);}
 }
 requestAnimationFrame(frame);

@@ -50,12 +50,19 @@ function validRecipe(r) {
   return { v: r.v, l };
 }
 
+/* a song is a list of slots; each slot layers 1-4 recipes (with a volume step 0-2) that play together */
+const SLOT_CAP = 48, SLOT_CARDS = 4;
 function validSong(b) {
   const items = b && b.items;
-  if (!Array.isArray(items) || items.length < 1 || items.length > 64) bad('1-64 CARDS ONLY');
+  if (!Array.isArray(items) || items.length < 1 || items.length > 64) bad('1-64 SLOTS ONLY');
   return items.map((it, i) => {
-    if (!it || !isInt(it.r, 1, 1e12) || !isInt(it.n, 1, 8) || ![0, 4, 8, 16].includes(it.t)) bad('CARD OUT OF RANGE');
-    return { r: it.r, n: it.n, t: i < items.length - 1 ? it.t : 0 };
+    if (!it || !isInt(it.n, 1, 8) || ![0, 4, 8, 16].includes(it.t)) bad('SLOT OUT OF RANGE');
+    let c = it.c;
+    if (c === undefined && isInt(it.r, 1, 1e12)) c = [[it.r, 2]];          // older one-card form
+    if (!Array.isArray(c) || c.length < 1 || c.length > SLOT_CARDS) bad('1-4 CARDS PER SLOT');
+    c = c.map((x) => { if (!Array.isArray(x) || x.length !== 2 || !isInt(x[0], 1, 1e12) || !isInt(x[1], 0, 2)) bad('CARD OUT OF RANGE'); return [x[0], x[1]]; });
+    if (new Set(c.map((x) => x[0])).size !== c.length) bad('SAME CARD TWICE IN A SLOT');
+    return { c, n: it.n, t: i < items.length - 1 ? it.t : 0 };
   });
 }
 
@@ -135,13 +142,14 @@ async function route(req, env, url) {
   }
   if (m === 'POST' && p === '/songs') {
     const items = validSong(await body(req));
-    const ids = [...new Set(items.map((i) => i.r))];
+    const ids = [...new Set(items.flatMap((i) => i.c.map((x) => x[0])))];
     const rs = await db.prepare(`SELECT id,card FROM recipes WHERE hidden=0 AND id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all();
     const cards = new Map(rs.results.map((r) => [r.id, JSON.parse(r.card)]));
     if (cards.size !== ids.length) bad('SONG USES A MISSING RECIPE');
+    for (const it of items) if (it.c.reduce((a, x) => a + cards.get(x[0]).length, 0) > SLOT_CAP) bad('MORE THAN 48 LAYERS IN A SLOT');
     await rateLimit(db, await visitor(req, env), 'song');
     const loops = items.reduce((a, it, i) => a + it.n + (i < items.length - 1 ? it.t / 4 : 0), 0);
-    const dots = items.map((it) => (cards.get(it.r)[0] || [0, 0, 0, 0, 0])[4]);
+    const dots = items.map((it) => it.c.map((x) => (cards.get(x[0])[0] || [0, 0, 0, 0, 0])[4]));
     const r = await db.prepare('INSERT INTO songs(created,items,loops,dots) VALUES(?,?,?,?) RETURNING id').bind(Date.now(), JSON.stringify(items), loops, JSON.stringify(dots)).first();
     await db.prepare(`UPDATE recipes SET uses=uses+1 WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).run();
     return { id: r.id };
