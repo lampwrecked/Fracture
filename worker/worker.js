@@ -92,11 +92,18 @@ const off = (url) => Math.max(0, parseInt(url.searchParams.get('offset') || '0',
 /* ---------- routes ---------- */
 async function route(req, env, url) {
   const db = env.DB;
-  await ensureSchema(db);
   const p = url.pathname.replace(/\/+$/, '') || '/';
   const m = req.method;
+  /* setup problems get a plain message instead of a generic server error */
+  if (!db || typeof db.prepare !== 'function') throw new HttpError(500, 'SETUP: NO DATABASE CONNECTED · add a D1 binding named DB (Bindings tab), then deploy');
+  try { await ensureSchema(db); }
+  catch (e) { throw new HttpError(500, 'SETUP: DATABASE ERROR · ' + (e && e.message || e)); }
 
-  if (m === 'GET' && p === '/') return { ok: true, name: 'fracture library' };
+  if (m === 'GET' && p === '/') {
+    const r = await db.prepare('SELECT (SELECT COUNT(*) FROM recipes) AS recipes, (SELECT COUNT(*) FROM songs) AS songs').first();
+    return { ok: true, name: 'fracture library', recipes: r.recipes, songs: r.songs,
+      allowed: (env.ALLOWED_ORIGINS || '(not set: any site may save)'), admin: env.ADMIN_KEY ? 'set' : 'NOT SET', salt: env.SALT ? 'set' : 'NOT SET' };
+  }
 
   if (m === 'GET' && p === '/recipes') {
     const lim = page(url, 24, 60), o = off(url);
@@ -201,7 +208,7 @@ export default {
     }
     let status = 200, out;
     try { out = await route(req, env, url); }
-    catch (e) { status = e.status || 500; out = { error: e.status ? e.message : 'SERVER ERROR' }; if (!e.status) console.error(e); }
+    catch (e) { status = e.status || 500; out = { error: e.status ? e.message : 'SERVER ERROR · ' + String(e && e.message || e).slice(0, 200) }; if (!e.status) console.error(e); }
     const headers = { ...cors, 'Content-Type': 'application/json' };
     if (req.method === 'GET' && status === 200) headers['Cache-Control'] = 'public, max-age=15';
     return new Response(JSON.stringify(out), { status, headers });
