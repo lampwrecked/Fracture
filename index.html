@@ -31,7 +31,7 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavi
   <select id="selType" aria-label="Fracture type"></select>
   <button id="bSnd">SOUND ON</button>
   <button id="bClk">CLICK ON</button>
-  <button id="bRec">⬇ MP4 BUILD</button>
+  <button id="bRec">⬇ MP4 REC</button>
   <button id="bJpg">JPG 4K</button>
   <button id="bClr">HEAL</button>
 </div>
@@ -780,7 +780,7 @@ function sched(){
   while(nextT<now+LOOKAHEAD){
     /* a step that is late (the page was busy drawing) still plays, just a touch late - it is never thrown away */
     for(const ev of events){
-      const xs=(exp&&nextT>=exp.start-1e-4&&nextT<exp.end)?ev.xs:0;
+      const xs=0;
       if(ev.step===nextStep&&loopNo>=Math.max(ev.startLoop,xs)){
         const tt=Math.max(nextT,now+.005);
         try{playEvent(ev,tt);}catch(e){console.warn(e);}
@@ -907,7 +907,7 @@ function spawnReplay(ev){
 
 /* ===== fade (also keeps the piece from whiting out) ===== */
 let fadeSh=7,fcount=0,lumAvg=0,fadeN=0;
-function trailEvery(){return(exp&&exp.state==='rec')?0:1;}   /* the mp4 build never fades: every pass lands on the previous image */
+function trailEvery(){return 1;}   /* recording captures the live canvas exactly as it looks */
 function fadePass(){
   const ev=trailEvery(),decay=ev>0&&(fadeN++%ev)===0;
   const img=g.getImageData(0,0,simW,simH),d=img.data,n=d.length,sh=fadeSh,W=96,gain=lumAvg>62?.86:lumAvg>46?.94:1;
@@ -945,7 +945,7 @@ function begin(e){
   held.set(e.pointerId,fr);frs.push(fr);
 }
 function end(e){const fr=held.get(e.pointerId);if(fr){held.delete(e.pointerId);fr.release();}}
-cv.addEventListener('pointerdown',e=>{e.preventDefault();showUI();if(exp)return;begin(e);try{cv.setPointerCapture(e.pointerId);}catch(_){}});
+cv.addEventListener('pointerdown',e=>{e.preventDefault();showUI();begin(e);try{cv.setPointerCapture(e.pointerId);}catch(_){}});
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 
@@ -1004,7 +1004,7 @@ function pickMime(){
   for(const m of c)if(MediaRecorder.isTypeSupported(m))return m;
   return '';
 }
-const REC_LABEL='⬇ MP4 BUILD';
+const REC_LABEL='⬇ MP4 REC';
 function endExport(){
   const E=exp;if(!E)return;
   exp=null;$('bRec').classList.remove('on');$('bRec').textContent=REC_LABEL;
@@ -1024,17 +1024,15 @@ function exportMP4(){
   const opts=mime?{mimeType:mime,videoBitsPerSecond:14e6,audioBitsPerSecond:192000}:{videoBitsPerSecond:14e6};
   let mr;
   try{mr=new MediaRecorder(stream,opts);}catch(e){try{mr=new MediaRecorder(stream);}catch(e2){toast('RECORDING FAILED');return;}}
-  const chunks=[],start=loopT0+Math.ceil((AC.currentTime+.5-loopT0)/LOOP)*LOOP,startNo=Math.round((start-loopT0)/LOOP),E={state:'armed',start,end:start+4*LOOP+.05,mr,rc,rctx,cancel:false};
-  /* layers enter in the order they were made, spread across the 4 passes; pass 4 has them all */
-  events.forEach((e,i)=>{e.xs=startNo+Math.floor(i*4/events.length);});
+  const chunks=[],start=loopT0+Math.ceil((AC.currentTime+.5-loopT0)/LOOP)*LOOP,E={state:'armed',start,end:start+4*LOOP+.05,mr,rc,rctx,cancel:false};
   mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
   mr.onstop=()=>{
     if(E.cancel)return;
     const type=mr.mimeType||mime||'video/webm',ext=type.indexOf('mp4')>=0?'mp4':'webm';
-    dl(new Blob(chunks,{type}),'fracture-build-'+stamp()+'.'+ext);
-    toast('SAVED '+ext.toUpperCase()+' · 4-PASS BUILD'+(ext==='webm'?' (this browser has no MP4 recorder)':''));
+    dl(new Blob(chunks,{type}),'fracture-live-'+stamp()+'.'+ext);
+    toast('SAVED '+ext.toUpperCase()+' · 4 LOOPS'+(ext==='webm'?' (this browser has no MP4 recorder)':''));
   };
-  exp=E;$('bRec').classList.add('on');$('bRec').textContent='◌ WAITING FOR BAR 1';toast('BUILDS FROM BLACK · 4 PASSES');
+  exp=E;$('bRec').classList.add('on');$('bRec').textContent='◌ WAITING FOR BAR 1';toast('RECORDING THE LIVE CANVAS · 4 LOOPS');
 }
 function setClick(on){metOn=on;$('bClk').textContent=on?'CLICK ON':'CLICK OFF';}
 $('bSnd').onclick=()=>setSound(!soundOn);
@@ -1075,8 +1073,6 @@ function frame(){
     const ac=AC.currentTime;
     if(exp.state==='armed'){
       if(ac>=exp.start-.04){
-        g.globalCompositeOperation='source-over';g.globalAlpha=1;g.fillStyle='#000';g.fillRect(0,0,simW,simH);
-        frs=frs.filter(f=>f.live);lumAvg=0;
         exp.mr.start(250);exp.state='rec';
       }else $('bRec').textContent='◌ STARTS IN '+Math.ceil(exp.start-ac)+'s';
     }
