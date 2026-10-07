@@ -10,11 +10,14 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavi
 #hint{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;pointer-events:none;color:#fff;font:12px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.35em;text-transform:uppercase;transition:opacity 1.2s;mix-blend-mode:difference}
 #hint b{font-size:22px;font-weight:400;letter-spacing:.7em;margin-right:-.7em}
 #hint span{opacity:.6}
-#ui,#info{position:fixed;z-index:5;font:11px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase;transition:opacity .6s}
-#ui{top:max(10px,env(safe-area-inset-top));left:10px;display:flex;gap:6px;flex-wrap:wrap}
+#ui,#info,#bMenu{position:fixed;z-index:5;font:11px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase;transition:opacity .6s}
+#bMenu{top:max(10px,env(safe-area-inset-top));left:10px;background:rgba(0,0,0,.6);color:#d8d8d8;border:1px solid rgba(255,255,255,.3);padding:9px 11px;font:inherit;letter-spacing:inherit;cursor:pointer;border-radius:0}
+#bMenu.open{background:#fff;color:#000}
+#ui{top:calc(max(10px,env(safe-area-inset-top)) + 38px);left:10px;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100vw - 20px)}
 #info{bottom:max(10px,env(safe-area-inset-bottom));left:10px;color:rgba(255,255,255,.55);pointer-events:none}
 #ui.hide{opacity:0;pointer-events:none}
 #info.hide{opacity:0}
+#ui.hide,#info.hide{visibility:hidden}
 #ui button{background:rgba(0,0,0,.6);color:#d8d8d8;border:1px solid rgba(255,255,255,.3);padding:9px 11px;font:inherit;letter-spacing:inherit;cursor:pointer;border-radius:0}
 #ui button:hover{background:#fff;color:#000}
 #ui select{background:rgba(0,0,0,.6);color:#d8d8d8;border:1px solid rgba(255,255,255,.3);padding:9px 11px;font:inherit;letter-spacing:inherit;text-transform:inherit;border-radius:0;cursor:pointer;max-width:62vw;color-scheme:dark}
@@ -27,16 +30,17 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavi
 <body>
 <canvas id="c"></canvas>
 <div id="hint"><b>FRACTURE</b><span>press · hold · touch</span></div>
-<div id="ui">
+<button id="bMenu" aria-expanded="false">☰ MENU</button>
+<div id="ui" class="hide">
   <select id="selType" aria-label="Fracture type"></select>
   <button id="bSnd">SOUND ON</button>
-  <button id="bClk">CLICK ON</button>
+  <button id="bClk">CLICK OFF</button>
   <button id="bRec">⬇ MP4 REC</button>
   <button id="bJpg">JPG 4K</button>
   <button id="bClr">HEAL</button>
 </div>
 <div id="beat"></div>
-<div id="info"></div>
+<div id="info" class="hide"></div>
 <div id="toast"></div>
 <script>
 (()=>{
@@ -758,7 +762,7 @@ function advance(job,now){
 function runJobs(now){
   for(let i=jobs.length-1;i>=0;i--){const j=jobs[i];try{advance(j,now);}catch(e){j.done=true;console.warn(e);}if(j.done)jobs.splice(i,1);}
 }
-let metOn=true,mNext=0,mBeat=0;const mvq=[],BEAT=4*STEP;
+let metOn=false,mNext=0,mBeat=0;const mvq=[],BEAT=4*STEP;
 function click(t,acc,first){
   const o=AC.createOscillator(),a=AC.createGain();o.type='square';o.frequency.value=first?2100:acc?1568:1046;
   a.gain.setValueAtTime(0,t);a.gain.linearRampToValueAtTime(first?.3:acc?.22:.13,t+.001);a.gain.exponentialRampToValueAtTime(.0004,t+.045);
@@ -945,16 +949,17 @@ function begin(e){
   held.set(e.pointerId,fr);frs.push(fr);
 }
 function end(e){const fr=held.get(e.pointerId);if(fr){held.delete(e.pointerId);fr.release();}}
-cv.addEventListener('pointerdown',e=>{e.preventDefault();showUI();begin(e);try{cv.setPointerCapture(e.pointerId);}catch(_){}});
+cv.addEventListener('pointerdown',e=>{e.preventDefault();begin(e);try{cv.setPointerCapture(e.pointerId);}catch(_){}});
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 
 /* ===== UI ===== */
-let uiT;
-function showUI(){
-  ui.classList.remove('hide');info.classList.remove('hide');
-  clearTimeout(uiT);uiT=setTimeout(()=>{if(document.activeElement===sel){showUI();return;}ui.classList.add('hide');info.classList.add('hide');},3500);
+/* the menu stays exactly as the user leaves it: it never auto-hides or pops back on pointer movement */
+function setMenu(open){
+  ui.classList.toggle('hide',!open);info.classList.toggle('hide',!open);
+  $('bMenu').classList.toggle('open',open);$('bMenu').setAttribute('aria-expanded',open);$('bMenu').textContent=open?'✕ CLOSE':'☰ MENU';
 }
+$('bMenu').onclick=()=>setMenu(ui.classList.contains('hide'));
 /* fracture type picker: RANDOM, then GLITCH(ES) / INSTRUMENT */
 const sel=$('selType');
 const GLN={repeat:'Repeat',static:'Static',scan:'Scanlines',pump:'Pump',mosaic:'Mosaic',shard:'Shard',echo:'Echo',invert:'Invert',tear:'Tear',smear:'Smear',rgb:'RGB split',blocks:'Blocks',sort:'Pixel sort',post:'Posterize',slice:'Slice'};
@@ -967,8 +972,7 @@ const INN={kick:'Kick',snare:'Snare roll',hat:'Hats',anvil:'Anvil',grind:'Grind'
     sel.appendChild(o);
   }
 }
-sel.addEventListener('change',()=>{showUI();sel.blur();});
-addEventListener('pointermove',showUI);showUI();
+sel.addEventListener('change',()=>{sel.blur();});
 const toastEl=$('toast');let toastT;
 function toast(s){toastEl.textContent=s;toastEl.style.opacity=1;clearTimeout(toastT);toastT=setTimeout(()=>toastEl.style.opacity=0,3200);}
 function setSound(on){
@@ -1034,7 +1038,7 @@ function exportMP4(){
   };
   exp=E;$('bRec').classList.add('on');$('bRec').textContent='◌ WAITING FOR BAR 1';toast('RECORDING THE LIVE CANVAS · 4 LOOPS');
 }
-function setClick(on){metOn=on;$('bClk').textContent=on?'CLICK ON':'CLICK OFF';}
+function setClick(on){metOn=on;$('bClk').textContent=on?'CLICK ON':'CLICK OFF';if(!on){beatLvl=0;mvq.length=0;}}
 $('bSnd').onclick=()=>setSound(!soundOn);
 $('bClk').onclick=()=>setClick(!metOn);
 $('bRec').onclick=exportMP4;
@@ -1042,7 +1046,7 @@ $('bJpg').onclick=exportJPG;
 $('bClr').onclick=clearAll;
 addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
-  if(k==='c')clearAll();else if(k==='m')setSound(!soundOn);else if(k==='k')setClick(!metOn);else if(k==='r')exportMP4();else if(k==='e')exportJPG();
+  if(k==='c')clearAll();else if(k==='m')setSound(!soundOn);else if(k==='k')setClick(!metOn);else if(k==='h')setMenu(ui.classList.contains('hide'));else if(k==='r')exportMP4();else if(k==='e')exportJPG();
   else if(k.length===1&&k>='0'&&k<='9'&&+k<sel.options.length){sel.selectedIndex=+k;toast('TYPE · '+sel.options[sel.selectedIndex].textContent);}
 });
 
@@ -1060,7 +1064,7 @@ function frame(){
   if(AC){
     const ac=AC.currentTime;
     const lat=AC.outputLatency||AC.baseLatency||0;
-    while(mvq.length&&mvq[0].t+lat<=ac){const b=mvq.shift();beatLvl=b.f?1:b.a?.75:.4;}
+    while(mvq.length&&mvq[0].t+lat<=ac){const b=mvq.shift();if(metOn)beatLvl=b.f?1:b.a?.75:.4;}
     while(vq.length&&vq[0].t<=ac){const e=vq.shift();if(ac-e.t<.5)spawnReplay(e.ev);}
   }
   if(++fcount%(fms>40?8:4)===0)fadePass();
