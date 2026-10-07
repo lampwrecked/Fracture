@@ -777,7 +777,7 @@ function audioFX(name,q){
     case 'shard':combDly.delayTime.setValueAtTime(.0035+rnd()*.008,t);hit(combWet.gain,.5+.4*q,0);break;
     case 'echo':hit(dlySend.gain,.5+.4*q,0,.02,.3);hit(fb2.gain,.78,.5,.02,.3);break;
     case 'smear':hit(swellSend.gain,.5+.4*q,0,.05,.5);break;
-    case 'slice':stutter(t);break;
+    case 'slice':stutter(t,.25);break;
     case 'repeat':repDly.delayTime.setValueAtTime([STEP/2,STEP,STEP*1.5][(rnd()*3)|0],t);hit(repSend.gain,.55+.35*q,0,.01,.3);hit(fbR.gain,.8,.4,.01,.3);break;
     case 'static':hit(noiseWet.gain,.3+.35*q,0,.005,.12);break;
     case 'scan':ringOsc.frequency.setValueAtTime(50,t);hit(ringWet.gain,.5+.3*q,0);break;
@@ -786,12 +786,18 @@ function audioFX(name,q){
       for(let i=0;i<n;i++){const ti=t+i*beat;dg.setValueAtTime(.18,ti);dg.linearRampToValueAtTime(1,ti+beat*.8);}break;}
   }
 }
-let gateBusy=0;
-function stutter(t){
-  if(!AC||t<gateBusy)return;
-  const d=STEP/2,n=8;gateBusy=t+n*d+.03;
-  for(let i=0;i<n;i++)gate.gain.setValueAtTime(i%2?0:1,t+i*d);
-  gate.gain.setValueAtTime(1,t+n*d);
+let gateBusy=0,lastStut=-9;
+/* stutter: a short rhythmic dip of the whole mix. it used to cut to full silence 8 times and could fire from every
+   layer, which drowned everything else. now: dips (not silence), smoothed edges (no clicks), lands on the 16th grid,
+   and at most once every 2 bars however many layers ask for it. */
+function stutter(t,depth){
+  if(!AC||t<gateBusy||t-lastStut<STEP*32)return;
+  if(loopT0!==null)t=Math.max(t,loopT0+Math.ceil((t-loopT0)/STEP-1e-6)*STEP);
+  const d=STEP/2,n=6,lo=depth==null?.4:depth,gg=gate.gain;
+  gateBusy=t+n*d+.03;lastStut=t;
+  gg.cancelScheduledValues(t);
+  for(let i=0;i<n;i++)gg.setTargetAtTime(i%2?lo:1,t+i*d,.004);
+  gg.setTargetAtTime(1,t+n*d,.004);
 }
 const SC=[0,1,3,6,7,10,11];
 /* colour families: percussion = reds→orange, dark/bass = magenta→violet, tonal = cyan→green, texture = pale ice */
