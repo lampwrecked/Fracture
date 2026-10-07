@@ -1,0 +1,14 @@
+# Settings GitHub uses when it deploys the Worker. Secrets (SALT, ADMIN_KEY) stay in the Cloudflare dashboard.
+name = "fracture-library"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+account_id = "ACCOUNT_ID_HERE"
+keep_vars = true                      # keep the variables you set in the dashboard
+
+[vars]
+ALLOWED_ORIGINS = "https://lampwrecked.github.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fracture"
+database_id = "DATABASE_ID_HERE"
