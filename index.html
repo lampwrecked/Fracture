@@ -1143,7 +1143,7 @@ addEventListener('keydown',e=>{
 
 /* ===== LIBRARY · recipes are numbers only (no text, no images) ===== */
 const QS=new URLSearchParams(location.search);
-const API_URL='';                                   /* paste the Cloudflare Worker address here once it exists */
+const API_URL='https://fracture-library.lampwrecked.workers.dev';                                   /* paste the Cloudflare Worker address here once it exists */
 const API=(QS.get('api')||API_URL).replace(/\/+$/,''),ADMIN=QS.get('admin')||'';
 const ENGINE=1;                                     /* bump when the engine changes how a recipe plays back */
 const RINST=['glass','thud','growl','clang','lead','noise','siren','kick','snare','hat','anvil','grind','acid','riser'];
