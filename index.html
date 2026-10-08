@@ -1169,6 +1169,124 @@ function exportSVG(){
   dl(new Blob([L.join('\n')],{type:'image/svg+xml'}),'fracture-'+stamp()+'.svg');
   toast('SAVED SVG · '+paths.length+' CRACKS · '+slabs.length+' SLABS');
 }
+/* ===== mp4 repair: browser recorders (Android Chrome especially) write FRAGMENTED mp4 whose header says the
+   length is 0, so phone galleries show the wrong length. this rebuilds it as a normal mp4 (one moov with the
+   full sample tables, then one mdat) without re-encoding anything: same frames, same sound, correct length. */
+function defragMP4(buf){
+  const d=new DataView(buf),u8=new Uint8Array(buf),N=buf.byteLength;
+  const u32=o=>d.getUint32(o),u64=o=>d.getUint32(o)*4294967296+d.getUint32(o+4),typ=o=>String.fromCharCode(u8[o],u8[o+1],u8[o+2],u8[o+3]);
+  const boxes=(s,e)=>{const out=[];let i=s;while(i+8<=e){let sz=u32(i),h=8;const t=typ(i+4);if(sz===1){sz=u64(i+8);h=16;}else if(sz===0)sz=e-i;if(sz<h||i+sz>e)break;out.push({t,s:i,h,e:i+sz,b:i+h});i+=sz;}return out;};
+  const kid=(b,t)=>boxes(b.b,b.e).find(x=>x.t===t),kids=(b,t)=>boxes(b.b,b.e).filter(x=>x.t===t);
+  const top=boxes(0,N),ftyp=top.find(b=>b.t==='ftyp'),moov=top.find(b=>b.t==='moov');
+  if(!ftyp||!moov||!top.some(b=>b.t==='moof'))return null;              /* already a normal mp4 (or not mp4): leave it */
+  /* tracks + their fragment defaults */
+  const tracks=new Map(),mvex=kid(moov,'mvex'),trex=new Map();
+  if(mvex)for(const x of kids(mvex,'trex'))trex.set(u32(x.b+4),{dur:u32(x.b+12),size:u32(x.b+16),flags:u32(x.b+20)});
+  for(const trak of kids(moov,'trak')){
+    const tkhd=kid(trak,'tkhd'),id=u32(tkhd.b+(u8[tkhd.b]===1?20:12)),mdia=kid(trak,'mdia'),mdhd=kid(mdia,'mdhd');
+    const ts=u32(mdhd.b+(u8[mdhd.b]===1?20:12)),hdlr=typ(kid(mdia,'hdlr').b+8);
+    tracks.set(id,{id,trak,ts,hdlr,S:[],chunks:[]});
+  }
+  /* read every fragment's samples: file offset, size, decode time, duration, sync, composition offset */
+  const order=[];
+  for(const moof of top.filter(b=>b.t==='moof'))for(const traf of kids(moof,'traf')){
+    const tfhd=kid(traf,'tfhd'),ff=u32(tfhd.b)&0xffffff,id=u32(tfhd.b+4),T=tracks.get(id);if(!T)continue;
+    const df=trex.get(id)||{dur:0,size:0,flags:0};let o=tfhd.b+8,base=moof.s,dDur=df.dur,dSize=df.size,dFl=df.flags;
+    if(ff&1){base=u64(o);o+=8;}if(ff&2)o+=4;if(ff&8){dDur=u32(o);o+=4;}if(ff&16){dSize=u32(o);o+=4;}if(ff&32){dFl=u32(o);o+=4;}
+    const tfdt=kid(traf,'tfdt');let t=tfdt?(u8[tfdt.b]===1?u64(tfdt.b+4):u32(tfdt.b+4)):(T.S.length?T.S[T.S.length-1].t+T.S[T.S.length-1].dur:0);
+    for(const trun of kids(traf,'trun')){
+      const v=u8[trun.b],tf=u32(trun.b)&0xffffff,n=u32(trun.b+4);let p=trun.b+8,off=base,first=null;
+      if(tf&1){off=base+d.getInt32(p);p+=4;}if(tf&4){first=u32(p);p+=4;}
+      const ch={T,first:T.S.length,n,src:off};
+      for(let i=0;i<n;i++){
+        let dur=dDur,size=dSize,fl=(i===0&&first!==null)?first:dFl,cto=0;
+        if(tf&0x100){dur=u32(p);p+=4;}if(tf&0x200){size=u32(p);p+=4;}if(tf&0x400){fl=u32(p);p+=4;if(i===0&&first!==null)fl=first;}
+        if(tf&0x800){cto=v?d.getInt32(p):u32(p);p+=4;}
+        T.S.push({off,size,t,dur,sync:!(fl&0x10000),cto});off+=size;t+=dur;
+      }
+      if(n){T.chunks.push(ch);order.push(ch);}
+    }
+  }
+  /* the fragment start times are the real timeline: each sample lasts until the next one starts */
+  let movDur=0;
+  for(const T of tracks.values()){
+    const S=T.S;if(!S.length)continue;
+    for(let i=0;i<S.length-1;i++)S[i].dur=Math.max(1,S[i+1].t-S[i].t);
+    T.dur=S[S.length-1].t+S[S.length-1].dur-S[0].t;T.t0=S[0].t;
+  }
+  const mvhd=kid(moov,'mvhd'),mts=u32(mvhd.b+(u8[mvhd.b]===1?20:12));
+  for(const T of tracks.values())if(T.S.length)movDur=Math.max(movDur,Math.round(T.dur*mts/T.ts));
+  /* new box writer */
+  const W=[];let len=0;
+  const box=(t,parts)=>{let n=8;for(const q of parts)n+=q.length;const h=new Uint8Array(8);new DataView(h.buffer).setUint32(0,n);for(let i=0;i<4;i++)h[4+i]=t.charCodeAt(i);const r=new Uint8Array(n);r.set(h,0);let o=8;for(const q of parts){r.set(q,o);o+=q.length;}return r;};
+  const ints=(a)=>{const r=new Uint8Array(a.length*4),v=new DataView(r.buffer);a.forEach((x,i)=>v.setUint32(i*4,x>>>0));return r;};
+  const full=(t,vf,a)=>box(t,[ints([vf]),ints(a)]);
+  const raw=b=>u8.subarray(b.s,b.e);
+  const setDur=(b,dur)=>{const c=u8.slice(b.s,b.e),v=new DataView(c.buffer),h=b.b-b.s;   /* mvhd / tkhd / mdhd */
+    if(c[h]===1){const o=h+(b.t==='tkhd'?28:24);v.setUint32(o,Math.floor(dur/4294967296));v.setUint32(o+4,dur>>>0);}
+    else v.setUint32(h+(b.t==='tkhd'?20:16),dur>>>0);return c;};
+  const stblFor=(T,offs)=>{
+    const S=T.S,stts=[];for(const s of S){const l=stts[stts.length-1];if(l&&l[1]===s.dur)l[0]++;else stts.push([1,s.dur]);}
+    const out=[];const stbl=kid(kid(kid(T.trak,'mdia'),'minf'),'stbl');
+    out.push(raw(kid(stbl,'stsd')));
+    out.push(full('stts',0,[stts.length].concat(...stts)));
+    if(S.some(s=>s.cto)){const c=[];for(const s of S){const l=c[c.length-1];if(l&&l[1]===s.cto)l[0]++;else c.push([1,s.cto]);}out.push(full('ctts',S.some(s=>s.cto<0)?0x01000000:0,[c.length].concat(...c)));}
+    if(S.some(s=>!s.sync)){const k=[];S.forEach((s,i)=>{if(s.sync)k.push(i+1);});out.push(full('stss',0,[k.length].concat(k)));}
+    out.push(full('stsz',0,[0,S.length].concat(S.map(s=>s.size))));
+    const sc=[];T.chunks.forEach((c,i)=>{const l=sc[sc.length-1];if(!l||l[1]!==c.n)sc.push([i+1,c.n,1]);});
+    out.push(full('stsc',0,[sc.length].concat(...sc)));
+    const big=offs.some(o=>o>4294967295);
+    if(big){const r=new Uint8Array(8+offs.length*8),v=new DataView(r.buffer);v.setUint32(4,offs.length);offs.forEach((o,i)=>{v.setUint32(8+i*8,Math.floor(o/4294967296));v.setUint32(12+i*8,o>>>0);});out.push(box('co64',[r]));}
+    else out.push(full('stco',0,[offs.length].concat(offs)));
+    return box('stbl',out);
+  };
+  const buildMoov=offFor=>{
+    const parts=[];
+    for(const b of boxes(moov.b,moov.e)){
+      if(b.t==='mvex')continue;
+      if(b.t==='mvhd'){parts.push(setDur(b,movDur));continue;}
+      if(b.t!=='trak'){parts.push(raw(b));continue;}
+      const T=[...tracks.values()].find(x=>x.trak.s===b.s);
+      if(!T||!T.S.length)continue;                                     /* empty track: drop it */
+      const tk=[];
+      for(const x of boxes(b.b,b.e)){
+        if(x.t==='tkhd'){tk.push(setDur(x,Math.round(T.dur*mts/T.ts)));continue;}
+        if(x.t==='edts')continue;
+        if(x.t!=='mdia'){tk.push(raw(x));continue;}
+        const md=[];
+        for(const y of boxes(x.b,x.e)){
+          if(y.t==='mdhd'){md.push(setDur(y,T.dur));continue;}
+          if(y.t!=='minf'){md.push(raw(y));continue;}
+          const mi=[];for(const z of boxes(y.b,y.e))mi.push(z.t==='stbl'?stblFor(T,offFor(T)):raw(z));
+          md.push(box('minf',mi));
+        }
+        tk.push(box('mdia',md));
+      }
+      /* a track that starts late (audio usually does) keeps its delay via an edit list */
+      if(T.t0>0){   /* elst v0, two entries: [empty gap of t0] then [the media from its start], both at rate 1 */
+        const el=new Uint8Array(32),ev=new DataView(el.buffer);ev.setUint32(4,2);
+        ev.setUint32(8,Math.round(T.t0*mts/T.ts));ev.setInt32(12,-1);ev.setInt16(16,1);
+        ev.setUint32(20,Math.round(T.dur*mts/T.ts));ev.setInt32(24,0);ev.setInt16(28,1);
+        tk.splice(1,0,box('edts',[box('elst',[el])]));}
+      parts.push(box('trak',tk));
+    }
+    return box('moov',parts);
+  };
+  /* data layout: samples copied in their original order, one chunk per fragment run */
+  let dataLen=0;for(const c of order){c.len=0;for(let i=0;i<c.n;i++)c.len+=c.T.S[c.first+i].size;dataLen+=c.len;}
+  const mdHead=dataLen+8>4294967295?16:8;
+  const offsFrom=start=>{let o=start;const m=new Map();for(const c of order){m.set(c,o);o+=c.len;}return T=>T.chunks.map(c=>m.get(c));};
+  const ft=raw(ftyp);
+  let mv=buildMoov(offsFrom(0));                      /* first pass only to learn the moov size */
+  mv=buildMoov(offsFrom(ft.length+mv.length+mdHead));
+  const out=new Uint8Array(ft.length+mv.length+mdHead+dataLen);let o=0;
+  out.set(ft,o);o+=ft.length;out.set(mv,o);o+=mv.length;
+  const hv=new DataView(out.buffer,o,mdHead);
+  if(mdHead===16){hv.setUint32(0,1);hv.setUint32(8,Math.floor((dataLen+16)/4294967296));hv.setUint32(12,(dataLen+16)>>>0);}else hv.setUint32(0,dataLen+8);
+  out.set([109,100,97,116],o+4);o+=mdHead;
+  for(const c of order){out.set(u8.subarray(c.src,c.src+c.len),o);o+=c.len;}
+  return out;
+}
 /* mp4 export: exactly 4 loops of the finished piece, starting on the loop boundary */
 let exp=null;
 function pickMime(){
@@ -1201,9 +1319,14 @@ function exportMP4(){
   mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
   mr.onstop=()=>{
     if(E.cancel)return;
-    const type=mr.mimeType||mime||'video/webm',ext=type.indexOf('mp4')>=0?'mp4':'webm';
-    dl(new Blob(chunks,{type}),'fracture-live-'+stamp()+'.'+ext);
-    toast('SAVED '+ext.toUpperCase()+' · 4 LOOPS'+(ext==='webm'?' (this browser has no MP4 recorder)':''));
+    const type=mr.mimeType||mime||'video/webm',ext=type.indexOf('mp4')>=0?'mp4':'webm',name='fracture-live-'+stamp()+'.'+ext;
+    const done=blob=>{dl(blob,name);toast('SAVED '+ext.toUpperCase()+' · 4 LOOPS'+(ext==='webm'?' (this browser has no MP4 recorder)':''));};
+    const rec=new Blob(chunks,{type});
+    if(ext!=='mp4'){done(rec);return;}
+    /* rebuild the fragmented recording as a normal mp4 so phone galleries show the real length */
+    toast('FINISHING MP4…');
+    rec.arrayBuffer().then(ab=>{let fixed=null;try{fixed=defragMP4(ab);}catch(e){console.warn('mp4 repair',e);}
+      done(fixed?new Blob([fixed],{type:'video/mp4'}):rec);}).catch(()=>done(rec));
   };
   exp=E;$('bRec').classList.add('on');$('bRec').textContent='◌ WAITING FOR BAR 1';toast('RECORDING THE LIVE CANVAS · 4 LOOPS');
 }
