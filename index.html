@@ -90,6 +90,7 @@ body.watching #bMenu,body.watching #ui,body.watching #info{display:none}
   <button id="bClk">CLICK OFF</button>
   <button id="bRec">⬇ MP4 REC</button>
   <button id="bJpg">JPG 4K</button>
+  <button id="bSvg">SVG</button>
   <button id="bClr">HEAL</button>
   <button id="bSave">SAVE</button>
   <button id="bLib">LIBRARY</button>
@@ -198,7 +199,7 @@ function findHit(x1,y1,x2,y2,id,own,owner){
 function build(ox,oy,seed,maxR,owner,gen){
   const gf=1+Math.min(gen||0,8)*.1;
   const rng=mulberry32(seed),segs=[],cells=[],nodes=[],own=[],hyp=Math.hypot(simW,simH),MAXSEG=800;
-  const add=(x1,y1,x2,y2,pl,w,h,id)=>{segs.push([x1,y1,x2,y2,pl,w,h]);own.push([x1,y1,x2,y2,id]);};
+  const add=(x1,y1,x2,y2,pl,w,h,id)=>{segs.push([x1,y1,x2,y2,pl,w,h]);own.push([x1,y1,x2,y2,id,w,pl]);};
   function slab(trail,pl,h){
     const a=trail[0],b=trail[trail.length-1],dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1,s=rng()<.5?-1:1,wd=(8+rng()*52)*K,nx=-dy/L*s*wd,ny=dx/L*s*wd;
     const pts=trail.map(p=>[p[0],p[1]]);
@@ -1095,6 +1096,79 @@ function exportJPG(){
   const x=c.getContext('2d');x.imageSmoothingEnabled=false;x.drawImage(cv,0,0,w,h);
   c.toBlob(b=>{if(b){dl(b,'fracture-'+stamp()+'-'+w+'x'+h+'.jpg');toast('SAVED '+w+' × '+h+' JPG');}},'image/jpeg',.95);
 }
+/* svg export: the crack geometry of every layer in the loop (plus anything still held), as clean vectors for
+   laser engraving. three colour-coded layers so laser software (LightBurn etc.) can give each its own operation:
+   CRACKS  black stroke  · continuous polylines, stroke width = crack width (score or line-engrave)
+   SLABS   blue fill     · the lit shard planes (fill / raster engrave)
+   FRAME   red hairline  · the canvas edge, at screen ratio (cut line or alignment, delete if not needed)
+   long side is 300 mm on import; scale to the material in the laser software. */
+const SVG_MM=300;
+function exportSVG(){
+  const W=simW,H=simH,f1=v=>Math.round(v*10)/10;
+  /* each layer only exports as far as its cracks actually grew (how long it was held), like on screen */
+  const geos=[],seen=new Set();
+  const grown=ev=>{let r=rad(ev.pEnd!=null?ev.pEnd:growth(ev.hold||0),MAXR());for(const o of ev.ops||[])if(o.k==='rev'&&o.r>r)r=o.r;return r;};
+  held.forEach(fr=>{if(fr.geo&&!seen.has(fr.uid)){seen.add(fr.uid);geos.push({geo:fr.geo,lim:rad(fr.p,fr.maxR)});}});
+  for(const e of events){if(e.geo&&e.vis!==false&&!seen.has(e.uid)){seen.add(e.uid);geos.push({geo:e.geo,lim:grown(e)});}}
+  if(!geos.length){toast('MAKE A FRACTURE FIRST');return;}
+  /* clip a segment to the canvas (Liang–Barsky); null if it is fully outside */
+  const clipSeg=(x1,y1,x2,y2)=>{
+    let t0=0,t1=1;const dx=x2-x1,dy=y2-y1;
+    const P=[-dx,dx,-dy,dy],Q=[x1,W-x1,y1,H-y1];
+    for(let i=0;i<4;i++){
+      if(P[i]===0){if(Q[i]<0)return null;continue;}
+      const r=Q[i]/P[i];
+      if(P[i]<0){if(r>t1)return null;if(r>t0)t0=r;}else{if(r<t0)return null;if(r<t1)t1=r;}
+    }
+    return[x1+dx*t0,y1+dy*t0,x1+dx*t1,y1+dy*t1,t0>0,t1<1];
+  };
+  /* clip a polygon to the canvas (Sutherland–Hodgman) */
+  const clipPoly=pts=>{
+    const edges=[[p=>p[0]>=0,'x',0],[p=>p[0]<=W,'x',W],[p=>p[1]>=0,'y',0],[p=>p[1]<=H,'y',H]];
+    let out=pts;
+    for(const [inside,ax,v] of edges){
+      const inp=out;out=[];if(!inp.length)break;
+      for(let i=0;i<inp.length;i++){
+        const a=inp[(i+inp.length-1)%inp.length],b=inp[i],ia=inside(a),ib=inside(b);
+        const cross=()=>{if(ax==='x'){const t=(v-a[0])/(b[0]-a[0]);return[v,a[1]+(b[1]-a[1])*t];}const t=(v-a[1])/(b[1]-a[1]);return[a[0]+(b[0]-a[0])*t,v];};
+        if(ib){if(!ia)out.push(cross());out.push(b);}else if(ia)out.push(cross());
+      }
+    }
+    return out;
+  };
+  const paths=[],slabs=[];
+  for(const {geo,lim} of geos){
+    /* chain segments of the same crack into continuous polylines (one laser path instead of hundreds of tiny ones) */
+    let cur=null,curId=-1,lx=NaN,ly=NaN;
+    const flush=()=>{if(cur&&cur.pts.length>1)paths.push(cur);cur=null;};
+    for(const s of geo.own){
+      if(s[6]!=null&&s[6]>lim){flush();continue;}
+      const c=clipSeg(s[0],s[1],s[2],s[3]);
+      if(!c){flush();continue;}
+      const w=s[5]||1;
+      if(!cur||s[4]!==curId||c[4]||Math.abs(c[0]-lx)>.01||Math.abs(c[1]-ly)>.01){flush();cur={w,pts:[[c[0],c[1]]]};curId=s[4];}
+      cur.pts.push([c[2],c[3]]);lx=c[2];ly=c[3];
+      if(c[5])flush();
+    }
+    flush();
+    for(const c of geo.cells){if(c.lit&&c.d<=lim){const p=clipPoly(c.pts);if(p.length>2)slabs.push(p);}}
+  }
+  const mmW=W>=H?SVG_MM:SVG_MM*W/H,mmH=W>=H?SVG_MM*H/W:SVG_MM;
+  const L=[];
+  L.push('<?xml version="1.0" encoding="UTF-8"?>');
+  L.push('<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="'+f1(mmW)+'mm" height="'+f1(mmH)+'mm" viewBox="0 0 '+W+' '+H+'">');
+  L.push('<title>Fracture</title><desc>Fracture · lampwrecked · '+geos.length+' layer'+(geos.length>1?'s':'')+' · '+paths.length+' crack paths · '+slabs.length+' slabs</desc>');
+  L.push('<g id="slabs" inkscape:groupmode="layer" inkscape:label="SLABS" fill="#0000ff" stroke="none">');
+  for(const p of slabs)L.push('<path d="M'+p.map(q=>f1(q[0])+' '+f1(q[1])).join('L')+'Z"/>');
+  L.push('</g>');
+  L.push('<g id="cracks" inkscape:groupmode="layer" inkscape:label="CRACKS" fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">');
+  for(const p of paths)L.push('<path stroke-width="'+f1(Math.max(.6,p.w)*K)+'" d="M'+p.pts.map(q=>f1(q[0])+' '+f1(q[1])).join('L')+'"/>');
+  L.push('</g>');
+  L.push('<g id="frame" inkscape:groupmode="layer" inkscape:label="FRAME" fill="none" stroke="#ff0000" stroke-width="'+f1(K)+'"><rect x="0" y="0" width="'+W+'" height="'+H+'"/></g>');
+  L.push('</svg>');
+  dl(new Blob([L.join('\n')],{type:'image/svg+xml'}),'fracture-'+stamp()+'.svg');
+  toast('SAVED SVG · '+paths.length+' CRACKS · '+slabs.length+' SLABS');
+}
 /* mp4 export: exactly 4 loops of the finished piece, starting on the loop boundary */
 let exp=null;
 function pickMime(){
@@ -1138,13 +1212,14 @@ $('bSnd').onclick=()=>setSound(!soundOn);
 $('bClk').onclick=()=>setClick(!metOn);
 $('bRec').onclick=exportMP4;
 $('bJpg').onclick=exportJPG;
+$('bSvg').onclick=exportSVG;
 $('bClr').onclick=clearAll;
 addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
   if(song){if(k==='escape')stopSong();return;}
   if(libOpen){if(k==='escape')closeLib();return;}
   if(e.target&&e.target.tagName==='SELECT')return;
-  if(k==='c')clearAll();else if(k==='m')setSound(!soundOn);else if(k==='k')setClick(!metOn);else if(k==='h')setMenu(ui.classList.contains('hide'));else if(k==='r')exportMP4();else if(k==='e')exportJPG();
+  if(k==='c')clearAll();else if(k==='m')setSound(!soundOn);else if(k==='k')setClick(!metOn);else if(k==='h')setMenu(ui.classList.contains('hide'));else if(k==='r')exportMP4();else if(k==='e')exportJPG();else if(k==='v')exportSVG();
   else if(k.length===1&&k>='0'&&k<='9'&&+k<sel.options.length){sel.selectedIndex=+k;toast('TYPE · '+sel.options[sel.selectedIndex].textContent);}
 });
 
